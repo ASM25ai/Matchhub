@@ -9,6 +9,10 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebResourceError;
+import android.os.Message;
+import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -40,6 +44,9 @@ public class MainActivity extends Activity {
     private FrameLayout featureLayer;
     private LinearLayout featureList;
     private boolean videoFullscreen = false;
+    private static final Set<String> BLOCKED_HOSTS = new HashSet<>(Arrays.asList("doubleclick.net","googlesyndication.com","googleadservices.com","popads.net","popcash.net","propellerads.com","adsterra.com","exoclick.com","trafficjunky.net"));
+    private boolean isAdHost(String host) { if(host==null)return false;host=host.toLowerCase(Locale.ROOT);for(String h:BLOCKED_HOSTS)if(host.equals(h)||host.endsWith("."+h))return true;return false; }
+    private boolean permittedNavigation(Uri uri) { String scheme=uri.getScheme();return "https".equalsIgnoreCase(scheme)||"http".equalsIgnoreCase(scheme); }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -80,21 +87,31 @@ public class MainActivity extends Activity {
         browser.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         browser.getSettings().setAllowFileAccess(false); browser.getSettings().setAllowContentAccess(false);
         browser.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
+        browser.getSettings().setSupportMultipleWindows(true);
+        browser.getSettings().setAllowFileAccessFromFileURLs(false);
+        browser.getSettings().setAllowUniversalAccessFromFileURLs(false);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(browser,false);
         browser.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
-                Uri uri = req.getUrl(); String scheme = uri.getScheme();
-                if (!req.isForMainFrame()) return false;
-                if (scheme == null || (!scheme.equals("https") && !scheme.equals("http"))) return true;
-                // External websites open in the device browser for safety and compatibility.
-                String host = uri.getHost()==null?"":uri.getHost().toLowerCase();
-                if (!(host.equals("footy100.st") || host.endsWith(".footy100.st") || host.equals("yallashoot.eu") || host.endsWith(".yallashoot.eu"))) {
-                    try { startActivity(new Intent(Intent.ACTION_VIEW,uri)); } catch(Exception ignored) {}
-                    return true;
-                }
+                Uri uri=req.getUrl();
+                if(!req.isForMainFrame())return false;
+                if(!permittedNavigation(uri))return true;
+                if(isAdHost(uri.getHost()))return true;
+                // Keep normal HTTP(S) navigation in MatchHub instead of launching Chrome.
                 return false;
+            }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if(isAdHost(request.getUrl().getHost()))
+                    return new WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));
+                return null;
             }
         });
         browser.setWebChromeClient(new WebChromeClient(){
+            @Override public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                // Block popup windows and new tabs, frequently used for intrusive ads.
+                return false;
+            }
+            @Override public void onCloseWindow(WebView window) { if(window!=null && window!=browser)window.destroy(); }
             @Override public void onShowCustomView(View view, CustomViewCallback callback) {
                 if (fullscreenView != null) { callback.onCustomViewHidden(); return; }
                 fullscreenView = view; fullscreenCallback = callback; videoFullscreen=true;
